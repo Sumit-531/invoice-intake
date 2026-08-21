@@ -1,0 +1,10 @@
+# Source and docs: normalise to LF in the repository.
+* text=auto eol=lf
+
+# Sample invoices must survive a clone byte-for-byte. Git sniffed the text-layer PDFs
+# (01, 02, 03) as text and offered to rewrite their line endings — which would corrupt
+# them for whoever clones this. They are documents, not source. Mark them binary.
+*.pdf binary
+*.jpg binary
+*.jpeg binary
+*.png binary

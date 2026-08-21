@@ -1,0 +1,32 @@
+# Local agent instructions — personal working notes, never published.
+CLAUDE.local.md
+
+# Session handoff — working state between sessions. Not part of the deliverable.
+HANDOFF.md
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Run artifacts: extractions, raw model responses, decisions, the review queue.
+out/
+
+# Working notes captured while building.
+notes/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
