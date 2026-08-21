@@ -4,8 +4,10 @@ Reads Japanese supplier invoices — PDFs, scans, and scanned PDFs — verifies 
 and registers it into an existing accounting system. Anything that cannot be verified goes
 to a human instead of into the ledger.
 
-> **Status: in development.** The run command below is the target interface, not yet the
-> shipped one. This notice comes out when it does.
+> **Status: in development.** One document at a time runs end to end today — routed,
+> extracted, verified against the accounting system's own arithmetic and master data, and
+> registered. Batching the whole folder, the vision route for scans, and the review queue
+> are not built yet. This notice comes out when they are.
 
 ---
 
@@ -19,11 +21,19 @@ Two terminals. The accounting system runs in one, the pipeline in the other.
 python accounting_api.py
 ```
 
-**2 — run the pipeline:**
+**2 — run the pipeline** on one document:
 
 ```bash
-python -m src.main
+python -m src.main invoices/<file>
 ```
+
+It exits `0` when the invoice was registered and `1` when it was stopped — either by a
+local check or by the accounting system. A stopped invoice prints every finding against
+it, with the evidence, and writes the same to `out/runs/`.
+
+If something on your machine already owns port 8080 on loopback, set `ACCOUNTING_API_URL`
+in `.env`; `accounting_api.py` binds `0.0.0.0`, so it stays reachable on the machine's own
+hostname.
 
 ### First-time setup
 
