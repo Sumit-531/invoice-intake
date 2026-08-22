@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .config import (
@@ -35,6 +35,12 @@ from .extract.extractor import ExtractionParseFailed
 from .extract.gemini import ExtractionCallFailed
 from .models import Partner, RegisteredInvoice, TaxCode
 from .register import AccountingClient, AccountingUnreachable, build_payload
+from .review import relative_to_repo, write_queue
+from .review.reasons import (
+    DOCUMENT_UNREADABLE,
+    EXTRACTION_FAILED,
+    REJECTED_BY_ACCOUNTING_SYSTEM as REJECTION_CODE,
+)
 from .verify import verify_extraction
 
 EXIT_REGISTERED = 0
@@ -66,7 +72,13 @@ READABLE_SUFFIXES = frozenset({".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
 @dataclass(frozen=True)
 class Outcome:
-    """One document's result, in the shape the summary table needs."""
+    """One document's result: the row the summary table needs, plus the record behind it.
+
+    The record travels with the outcome so the review queue can be built from what the run
+    already produced rather than by reading twelve files back off disk it has just
+    written. It is the same dictionary that went to `out/runs/<name>.json`, so the queue
+    the batch emits and the queue `python -m src.review` regenerates are identical.
+    """
 
     source: str
     route: str
@@ -76,6 +88,7 @@ class Outcome:
     total_tokens: int
     elapsed_seconds: float
     from_cache: bool
+    record: dict = field(default_factory=dict)
 
 
 def _emit(label: str, value: object = "") -> None:
@@ -85,6 +98,10 @@ def _emit(label: str, value: object = "") -> None:
 def _write_run_record(name: str, record: dict) -> Path:
     ensure_out_dirs()
     path = RUNS_DIR / f"{Path(name).stem}.json"
+    # Its own location, stored inside it. That lets the review queue point a reviewer at
+    # the full evidence without this package's layout being knowledge the queue has to
+    # carry — and it survives the record being read back later by something else.
+    record["record_path"] = relative_to_repo(path)
     path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
@@ -159,6 +176,7 @@ def process(
             total_tokens=0 if extraction.from_cache else raw.total_tokens,
             elapsed_seconds=0.0 if extraction.from_cache else raw.elapsed_seconds,
             from_cache=extraction.from_cache,
+            record=record,
         )
 
     if not verification.ok:
@@ -217,10 +235,50 @@ def process(
         "\n  The accounting system refused something the local checks passed. That is a "
         "gap in verification, not just a bad invoice."
     )
+    # Recorded as a finding and not merely as a status, so it reaches the review queue by
+    # the same path every other reason takes. A refusal that exists only as an HTTP code
+    # buried in a run record is a refusal nobody reads.
+    record["findings"].append(
+        {
+            "code": REJECTION_CODE,
+            "message": registration.error_message
+            or "The accounting system refused this invoice.",
+            "evidence": {
+                "http_status": registration.status,
+                "error_code": registration.error_code,
+                "error_details": registration.error_details,
+                "submitted_payload": payload,
+            },
+        }
+    )
     return _outcome(
         REJECTED_BY_ACCOUNTING_SYSTEM,
         f"{registration.status} {registration.error_code}",
     )
+
+
+def _failure_record(source: str, route: str, code: str, message: str, exc: Exception) -> dict:
+    """A run record for a document that never reached verification, written like any other.
+
+    A document that could not be read has no findings of its own, and the tempting thing
+    is to let it be a row in the table and nothing more. That is how a file quietly stops
+    existing: the review queue is built from run records, so a document with no record is
+    a document nobody is ever asked about.
+    """
+    record = {
+        "source": source,
+        "route": route,
+        "findings": [
+            {
+                "code": code,
+                "message": message,
+                "evidence": {"error_type": type(exc).__name__, "error": str(exc)},
+            }
+        ],
+        "outcome": COULD_NOT_RUN,
+    }
+    _write_run_record(source, record)
+    return record
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +389,24 @@ def run_batch(directory: Path) -> int:
             _emit("document", path.name)
             _emit("FAILED", f"could not be opened — {type(exc).__name__}: {exc}")
             outcomes.append(
-                Outcome(path.name, "unknown", 0, COULD_NOT_RUN, str(exc)[:60], 0, 0.0, False)
+                Outcome(
+                    path.name,
+                    "unknown",
+                    0,
+                    COULD_NOT_RUN,
+                    str(exc)[:60],
+                    0,
+                    0.0,
+                    False,
+                    _failure_record(
+                        path.name,
+                        "unknown",
+                        DOCUMENT_UNREADABLE,
+                        "This file could not be opened as a document, so nothing was "
+                        "extracted from it and nothing was submitted.",
+                        exc,
+                    ),
+                )
             )
             continue
 
@@ -364,6 +439,14 @@ def run_batch(directory: Path) -> int:
                     0,
                     0.0,
                     False,
+                    _failure_record(
+                        path.name,
+                        document.route.value,
+                        EXTRACTION_FAILED,
+                        "Extraction did not return anything that could be read as an "
+                        "invoice. The raw response was persisted before parsing.",
+                        exc,
+                    ),
                 )
             )
 
@@ -377,6 +460,14 @@ def run_batch(directory: Path) -> int:
     _emit("summary", ", ".join(f"{count} {name}" for name, count in sorted(tally.items())))
     _emit("table", _write_outcome_table(outcomes))
 
+    queue_path, queue = write_queue([o.record for o in outcomes if o.record])
+    _emit(
+        "review",
+        f"{queue.needs_a_person} document(s) need a person — {queue_path}"
+        if queue.items
+        else f"nothing needs a person — {queue_path}",
+    )
+
     undecided = [o for o in outcomes if o.outcome not in DECIDED]
     if undecided:
         print(
@@ -389,6 +480,14 @@ def run_batch(directory: Path) -> int:
 
 
 def run_one(path: Path) -> int:
+    """One document, in full detail. Deliberately does not touch the review queue.
+
+    The queue is an artifact of a *batch* — "here is everything outstanding" — and writing
+    it from a single-document run would replace a twelve-invoice queue with a one-invoice
+    one, silently discarding four items a reviewer had not worked yet. The run record is
+    still written, so `python -m src.review` folds this document into the queue whenever
+    the queue is next rebuilt.
+    """
     client = AccountingClient()
     partners = client.partners()
     tax_codes = client.tax_codes()

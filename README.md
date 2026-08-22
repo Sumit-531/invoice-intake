@@ -4,12 +4,12 @@ Reads Japanese supplier invoices — PDFs, scans, and scanned PDFs — verifies 
 and registers it into an existing accounting system. Anything that cannot be verified goes
 to a human instead of into the ledger.
 
-> **Status: in development.** The whole folder runs end to end today — both routes, all
-> twelve documents, each routed, extracted, verified against the accounting system's own
-> arithmetic and master data, and either registered or stopped with a reason. What is not
-> built yet is the review queue as a first-class artifact: a stopped invoice reports its
-> findings and writes them to `out/runs/`, but there is no single file collecting them for
-> a reviewer. This notice comes out when there is.
+> **Status: a working core, not a product.** The whole folder runs end to end — both
+> routes, all twelve documents, each routed, extracted, verified against the accounting
+> system's own arithmetic and master data, and then either registered or handed to a
+> person with a reason and the evidence for it. What is deliberately *not* here is
+> recorded and defended in `SUBMISSION.md` section 3 rather than quietly filled in; the
+> largest absence is a review screen — the queue behind one is built, the screen is not.
 
 ---
 
@@ -43,6 +43,30 @@ person; a run reporting 12 of 12 registered would mean something was wrong.
 
 A single-document run exits `0` when the invoice was registered and `1` when it was
 stopped. Either way the findings and the evidence go to `out/runs/<name>.json`.
+
+### The review queue
+
+Everything that could not be registered ends up in one file:
+
+```
+out/review_queue.md      what needs a person, and what the system declined to do
+out/review_queue.json    the same, structured
+```
+
+A batch writes it. It can also be rebuilt at any time from run records already on disk,
+which needs neither an API key nor the accounting system running:
+
+```bash
+python -m src.review
+```
+
+Each item carries what was read, which check stopped it, the evidence, **the decision that
+belongs to a person**, and — deliberately — **what the system did not do on its own**. A
+queue that only lists faults invites "why didn't it just fix that?"; answering it in the
+same breath is where the automation boundary is written down.
+
+A stopped duplicate is reported but not queued. Nothing is wrong with that document, and a
+queue that sends reviewers after non-existent faults is a queue that stops being read.
 
 Extraction is cached on disk, keyed by file content, so re-running costs no API requests
 and takes seconds. Uncached calls in a batch are spaced 13 seconds apart to stay inside the
@@ -102,7 +126,8 @@ is a decision for a person — not something to retry until it succeeds.
 pytest
 ```
 
-Ninety-three tests, all offline. **No API key, no running accounting system, no network.**
+A hundred and eleven tests, all offline. **No API key, no running accounting system, no
+network.**
 That is a property of the design rather than of the tests: `verify/` is pure, so every
 check can be run against a fabricated invoice for free.
 
@@ -116,6 +141,11 @@ check can be run against a fabricated invoice for free.
 - `tests/test_routing.py` — renames a text-layer PDF to `.jpg` and asserts the route does
   not move, and the reverse. The contract test proves no filename is *named*; this proves
   the extension is not consulted either.
+- `tests/test_review.py` — the queue built from fabricated run records, including the two
+  cases that only appear when something has gone wrong: a reason code the guidance table
+  has never met, and a document that stopped without recording why. Both must be surfaced
+  rather than raised on. One test walks `verify/` and fails if any check it can emit has
+  no guidance attached, so a check cannot ship without deciding who owns its outcome.
 
 There is also a sabotage driver, which corrupts a real extraction eleven ways and shows
 each one stopped:
@@ -133,7 +163,7 @@ python -m tests.sabotage invoices/<file>
 | `src/extract/` | Document → structured data. The only place a model is called. |
 | `src/verify/` | Pure functions. No I/O, no model, no network. |
 | `src/register/` | The accounting API client. |
-| `src/review/` | The human queue. |
+| `src/review/` | The human queue: what could not be automated, and why. |
 | `invoices/` | Sample input. Read-only. |
 | `out/` | Run artifacts — raw responses, extractions, decisions. Gitignored. |
 | `accounting_api.py` | The mock accounting system, verbatim from the assignment. Unmodified. |
