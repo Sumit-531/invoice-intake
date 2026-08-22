@@ -66,8 +66,11 @@ def run(path: Path) -> int:
     client = AccountingClient()
     partners = client.partners()
     tax_codes = client.tax_codes()
+    # Fetched, not remembered. When batch mode lands, each successful registration appends
+    # to this list so the second copy of an invoice is caught within a single run too.
+    already_registered = client.invoices()
 
-    verification = verify_extraction(invoice, partners, tax_codes)
+    verification = verify_extraction(invoice, partners, tax_codes, already_registered)
 
     record: dict = {
         "source": document.name,
@@ -87,12 +90,20 @@ def run(path: Path) -> int:
     }
 
     if not verification.ok:
-        _emit("verify", f"STOPPED — {len(verification.findings)} finding(s)")
+        # A duplicate is not a defect. Nothing is wrong with the document — it arrived
+        # twice — and a reviewer told "STOPPED" goes looking for a fault that is not there.
+        already_seen = verification.codes == ("ALREADY_REGISTERED",)
+        _emit(
+            "verify",
+            "ALREADY REGISTERED — not submitted again"
+            if already_seen
+            else f"STOPPED — {len(verification.findings)} finding(s)",
+        )
         for finding in verification.findings:
             print(f"\n  [{finding.code}] {finding.message}")
             for key, value in finding.evidence.items():
                 print(f"      {key}: {value}")
-        record["outcome"] = "stopped_locally"
+        record["outcome"] = "already_registered" if already_seen else "stopped_locally"
         print()
         _emit("record", _write_run_record(document.name, record))
         return EXIT_STOPPED

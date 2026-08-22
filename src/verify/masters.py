@@ -12,15 +12,7 @@ from __future__ import annotations
 
 from ..models import ExtractedInvoice, Partner, TaxCode
 from .result import Finding
-
-
-def _normalise(value: str) -> str:
-    """Whitespace and case are presentation, not identity."""
-    return "".join(value.split()).casefold()
-
-
-def _normalise_registration(value: str) -> str:
-    return "".join(ch for ch in value if ch.isalnum()).upper()
+from .text import normalise_for_match, normalise_registration
 
 
 def resolve_partner(
@@ -31,24 +23,29 @@ def resolve_partner(
     Match order is strongest key first. The registration number is a national identifier
     and is worth more than any name comparison: a supplier may print an abbreviation, a
     trading name, or a division, but the T-number is the same number every time.
+
+    Both sides of every comparison are normalised — see `text.py`. Width and company-form
+    variation is presentation, and a supplier read off a photograph in full-width digits is
+    the same supplier. What normalisation does *not* do is approximate: the comparison
+    stays exact, because a near-match would mean a payment to a nearly-right company.
     """
     printed_registration = invoice.supplier_registration_no
     if printed_registration:
-        target = _normalise_registration(printed_registration)
+        target = normalise_registration(printed_registration)
         for partner in partners:
-            if partner.registration_no and _normalise_registration(
+            if partner.registration_no and normalise_registration(
                 partner.registration_no
             ) == target:
                 return partner.partner_code, "registration_no", []
 
-    printed_name = _normalise(invoice.supplier_name)
+    printed_name = normalise_for_match(invoice.supplier_name)
     for partner in partners:
-        if _normalise(partner.name) == printed_name:
+        if normalise_for_match(partner.name) == printed_name:
             return partner.partner_code, "name", []
 
     for partner in partners:
         for alias in partner.aliases:
-            if _normalise(alias) == printed_name:
+            if normalise_for_match(alias) == printed_name:
                 return partner.partner_code, "alias", []
 
     return (

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import requests
 
 from ..config import ACCOUNTING_API_KEY, ACCOUNTING_API_URL, HTTP_TIMEOUT_SECONDS
-from ..models import Partner, TaxCode
+from ..models import Partner, RegisteredInvoice, TaxCode
 
 
 class AccountingUnreachable(RuntimeError):
@@ -85,8 +85,15 @@ class AccountingClient:
     def tax_codes(self) -> list[TaxCode]:
         return [TaxCode(**item) for item in self._get_data("/tax-codes")["tax_codes"]]
 
-    def invoices(self) -> list[dict]:
-        return self._get_data("/invoices")["invoices"]
+    def invoices(self) -> list[RegisteredInvoice]:
+        """What the accounting system already holds — the input to duplicate detection.
+
+        Fetched at the start of every run rather than remembered between runs. This system
+        is in-memory and resets on restart; a ledger of ours would not, and would start
+        blocking invoices that are no longer registered.
+        """
+        records = self._get_data("/invoices")["invoices"]
+        return [RegisteredInvoice.model_validate(record) for record in records]
 
     def create_invoice(self, payload: dict) -> Registration:
         status, body = self._request("POST", "/invoices", payload)

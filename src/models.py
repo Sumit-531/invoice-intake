@@ -96,6 +96,29 @@ class Partner(BaseModel):
     registration_no: str | None = None
 
 
+class RegisteredInvoice(BaseModel):
+    """An invoice the accounting system already holds. Ground truth, like the masters.
+
+    This is what duplicate detection compares against, and it is fetched rather than
+    remembered. A ledger of our own submissions would drift: the accounting system is
+    in-memory and resets on restart, so after one restart our file would start blocking
+    invoices that are no longer registered. Asking the system that owns the answer costs
+    one GET and holds no state that can go stale.
+
+    Identity is `(partner_code, invoice_number)` — the accounting system's own key. The
+    amount is carried for evidence only: a second copy with a different total is still the
+    same invoice arriving twice, and the disagreement makes it more alarming, not less.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    accounting_id: str
+    partner_code: str
+    invoice_number: str
+    issue_date: str = ""
+    total_amount: int | None = None
+
+
 class TaxCode(BaseModel):
     """An entry in the accounting system's tax-code master. Ground truth."""
 
