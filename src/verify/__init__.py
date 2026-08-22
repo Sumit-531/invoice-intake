@@ -18,6 +18,11 @@ defect living in that understanding survives both.
 Duplicate detection sits in tier 2: the set of already-registered invoices is fetched from
 the accounting system, so it is external ground truth exactly like the partner master, and
 this package receives it as an argument like everything else it cannot reach out for.
+
+One check here belongs to no tier: `handwriting.py`. It is not verifying a number against
+anything — it is the automation boundary, the point where the system declines to act and
+hands the document to a person. See that module for why that is a stop rather than a
+warning.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ from ..models import ExtractedInvoice, Partner, RegisteredInvoice, TaxCode
 from .arithmetic import Amounts, check_amounts, recompute
 from .dates import check_dates
 from .duplicates import check_not_already_registered
+from .handwriting import check_handwriting
 from .masters import check_lines_are_registrable, resolve_partner, resolve_tax_codes
 from .result import Finding, Verification
 
@@ -37,6 +43,7 @@ __all__ = [
     "Verification",
     "check_amounts",
     "check_dates",
+    "check_handwriting",
     "check_not_already_registered",
     "recompute",
     "resolve_partner",
@@ -63,6 +70,11 @@ def verify_extraction(
     silently, which is precisely the outcome this argument exists to prevent.
     """
     findings: list[Finding] = []
+
+    # First in the list, though it is neither the strongest check nor a check on the
+    # numbers. It is the one finding that says "a person wrote on this document", and a
+    # reviewer scanning a report needs to see that before anything arithmetic.
+    findings.extend(check_handwriting(invoice))
 
     findings.extend(check_dates(invoice))
     findings.extend(check_lines_are_registrable(invoice))

@@ -484,6 +484,72 @@ def test_a_duplicate_of_an_unresolvable_supplier_reports_only_the_real_failure()
 
 
 # ---------------------------------------------------------------------------
+# Handwriting — the automation boundary, not a check on a number.
+# ---------------------------------------------------------------------------
+
+
+def test_a_received_stamp_leaves_no_note_and_does_not_stop_the_invoice():
+    """Office noise is the common case and must not queue anything. A review queue that
+    every stamped document lands in is a queue nobody reads.
+
+    The extractor is what decides this — it is told to ignore filing marks and leave the
+    note null — so the case is expressed here the way it actually arrives: as an extraction
+    with nothing in `handwriting_note`.
+    """
+    assert codes_for(baseline()) == ()
+
+
+def test_a_handwritten_change_to_bank_details_goes_to_a_person():
+    """The hazard in full. No API field carries a bank account, so nothing downstream can
+    catch this: the accounting system will accept the invoice and pay the printed account.
+    A local stop is not the first line of defence here, it is the only one."""
+    invoice = baseline()
+    invoice.handwriting_note = "振込先変更 みずほ銀行 渋谷支店 普通 1234567"
+
+    assert codes_for(invoice) == ("HANDWRITING_ANNOTATION",)
+
+
+def test_the_handwritten_change_is_transcribed_and_never_applied():
+    """Detected and flagged, never interpreted. The system does not read an account number
+    off a photograph and pay it — a misread digit there is money gone to a stranger, which
+    is not recoverable the way a misread line amount is."""
+    invoice = baseline()
+    invoice.handwriting_note = "支払期日 3月31日に変更"
+
+    finding = findings_for(invoice)[0]
+
+    assert finding.evidence["handwriting_as_read"] == "支払期日 3月31日に変更"
+    # The printed value is reported unchanged. Nothing derived the handwritten date into
+    # the field the accounting system would act on.
+    assert finding.evidence["printed_due_date"] == "2026-02-28"
+    assert invoice.due_date == "2026-02-28"
+
+
+def test_an_annotated_invoice_stops_even_when_its_arithmetic_is_perfect():
+    """This is why the check exists. Every number on the page adds up, every master
+    resolves, and the invoice is still not safe to register automatically."""
+    invoice = baseline()
+    invoice.handwriting_note = "振込先変更"
+
+    verification = verify_extraction(invoice, PARTNERS, TAX_CODES, NOTHING_REGISTERED)
+
+    assert not verification.ok
+    # The arithmetic ran and agreed — the recomputed figures are right there. The invoice
+    # is blocked anyway, and nothing but the handwriting is blocking it.
+    assert verification.codes == ("HANDWRITING_ANNOTATION",)
+    assert verification.total_amount == 334400
+
+
+def test_whitespace_in_the_note_is_not_a_handwritten_annotation():
+    """A model returning `" "` rather than null must not queue the document. An empty
+    string is the absence of a note, however it was spelled."""
+    invoice = baseline()
+    invoice.handwriting_note = "   "
+
+    assert codes_for(invoice) == ()
+
+
+# ---------------------------------------------------------------------------
 # The contract every finding must keep
 # ---------------------------------------------------------------------------
 
@@ -520,10 +586,30 @@ def _missing_unit():
     return invoice
 
 
+def _handwritten_bank_change():
+    invoice = baseline()
+    invoice.handwriting_note = "振込先変更 みずほ銀行 渋谷支店 普通 1234567"
+    return invoice
+
+
 @pytest.mark.parametrize(
     "build_broken_invoice",
-    [_sign_error, _unknown_supplier, _unknown_rate, _missing_due_date, _missing_unit],
-    ids=["sign_error", "unknown_supplier", "unknown_rate", "missing_due_date", "missing_unit"],
+    [
+        _sign_error,
+        _unknown_supplier,
+        _unknown_rate,
+        _missing_due_date,
+        _missing_unit,
+        _handwritten_bank_change,
+    ],
+    ids=[
+        "sign_error",
+        "unknown_supplier",
+        "unknown_rate",
+        "missing_due_date",
+        "missing_unit",
+        "handwritten_bank_change",
+    ],
 )
 def test_every_rejection_carries_evidence_a_person_can_act_on(build_broken_invoice):
     """CLAUDE.md: 'Every rejection carries a structured reason and the evidence for it —

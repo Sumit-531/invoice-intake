@@ -40,6 +40,12 @@ class RawResponse:
     total_tokens: int
     elapsed_seconds: float
 
+    # How this response was obtained, for the cost table. Both carry defaults so that an
+    # entry written before the vision route existed still loads — a cache that cannot read
+    # its own older entries is a cache that silently starts costing requests again.
+    route: str = "text"
+    page_images: int = 0
+
 
 def _slug(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", value)

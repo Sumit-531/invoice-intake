@@ -12,6 +12,7 @@ it before a schema ever touches it.
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 
 from google import genai
 from google.genai import types
@@ -19,6 +20,7 @@ from google.genai import types
 from ..config import GEMINI_API_KEY, GEMINI_MODEL, MODEL_TIMEOUT_SECONDS
 from ..models import ExtractedInvoice
 from .cache import RawResponse, now_iso
+from .render import IMAGE_MIME_TYPE, PageImage
 
 
 class ExtractionCallFailed(RuntimeError):
@@ -38,12 +40,30 @@ def _client() -> genai.Client:
     )
 
 
+def _contents(prompt: str, images: Sequence[PageImage]) -> list[object]:
+    """Instructions first, then the pages, each announced by number.
+
+    The label before each image is not decoration. Without it a two-page document is two
+    anonymous pictures, and an extractor that reads them out of order — or reads one twice
+    — has no way to say so. With it, the page structure survives into the request.
+    """
+    parts: list[object] = [prompt]
+
+    for image in images:
+        parts.append(f"--- PAGE {image.page_number} OF {len(images)} ---")
+        parts.append(types.Part.from_bytes(data=image.data, mime_type=IMAGE_MIME_TYPE))
+
+    return parts
+
+
 def generate(
     prompt: str,
     *,
     source_name: str,
     source_sha256: str,
     prompt_version: str,
+    route: str,
+    images: Sequence[PageImage] = (),
 ) -> RawResponse:
     """One call. Returns the raw text; does not parse it."""
     client = _client()
@@ -52,7 +72,7 @@ def generate(
     try:
         response = client.models.generate_content(
             model=GEMINI_MODEL,
-            contents=prompt,
+            contents=_contents(prompt, images),
             config=types.GenerateContentConfig(
                 # The schema is enforced by the provider, so a malformed shape fails at
                 # the boundary instead of halfway through the verifier.
@@ -85,6 +105,8 @@ def generate(
         response_tokens=getattr(usage, "candidates_token_count", 0) or 0,
         total_tokens=getattr(usage, "total_token_count", 0) or 0,
         elapsed_seconds=round(elapsed, 2),
+        route=route,
+        page_images=len(images),
     )
 
 

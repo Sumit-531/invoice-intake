@@ -7,11 +7,20 @@ reproducible only by accident.
 The instructions describe *classes* of Japanese invoice, never the documents in the
 sample set. An instruction that only works because someone knew which file was coming is
 not an instruction, it is a hardcoded answer.
+
+TWO VERSIONS, NOT ONE BUMPED
+The two routes carry separate version strings rather than sharing one. `_INSTRUCTIONS` is
+identical for both — what the extractor is being asked for does not change with how the
+document is delivered — and only the wrapper differs. Sharing a single version would mean
+that adding the vision route invalidated every cached text response and cost a request per
+document to recover output that was already correct. Against a 20-request daily ceiling
+that is not a rounding error, and the two routes genuinely are two prompts.
 """
 
 from __future__ import annotations
 
 PROMPT_VERSION = "v1"
+VISION_PROMPT_VERSION = "v1-vision"
 
 _INSTRUCTIONS = """\
 You are transcribing a Japanese supplier invoice (請求書) into structured data for an
@@ -81,6 +90,26 @@ the invoice and brings in a person, a guess becomes a payment.
 """
 
 
+_VISION_PREAMBLE = """\
+This document has no text layer. What follows the instructions is a rendered image of
+every page, in order, each one labelled with its page number.
+
+Read the characters off the image. You are transcribing a photograph or a scan of paper,
+so expect the failure modes of that medium: skew, shadow, a stamp overlapping a figure,
+a comma that could be a decimal point, and digits that resemble one another.
+
+Two consequences, both of which matter more here than on a clean text layer:
+
+- **Do not resolve an ambiguous character by picking the more plausible invoice.** If a
+  digit could be 3 or 8, that field is unreadable, and null is the correct answer. A
+  legible-looking guess is indistinguishable downstream from a correct reading, and it
+  becomes a payment.
+- **Transcribe the printed summary figures as printed, even if they look wrong to you.**
+  They are checked against an independent recalculation from the line items. A summary you
+  have quietly "corrected" to agree with the lines destroys that check.
+"""
+
+
 def build_prompt(document_text: str) -> str:
     """Assemble the text-route prompt for one document."""
     return (
@@ -88,4 +117,19 @@ def build_prompt(document_text: str) -> str:
         "--- BEGIN INVOICE TEXT ---\n"
         f"{document_text}\n"
         "--- END INVOICE TEXT ---\n"
+    )
+
+
+def build_vision_prompt(page_count: int) -> str:
+    """Assemble the vision-route prompt. The images are attached by the caller.
+
+    The page count is stated rather than left to be inferred: an extractor told there are
+    two pages, and shown two pages, has a way to notice that it only read one — which is
+    precisely the multi-page failure the arithmetic check exists to catch afterwards.
+    """
+    pages = "page" if page_count == 1 else f"all {page_count} pages"
+    return (
+        f"{_INSTRUCTIONS}\n"
+        f"{_VISION_PREAMBLE}\n"
+        f"The invoice below is delivered as {pages}. Read every one of them.\n"
     )

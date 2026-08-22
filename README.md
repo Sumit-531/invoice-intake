@@ -4,10 +4,12 @@ Reads Japanese supplier invoices — PDFs, scans, and scanned PDFs — verifies 
 and registers it into an existing accounting system. Anything that cannot be verified goes
 to a human instead of into the ledger.
 
-> **Status: in development.** One document at a time runs end to end today — routed,
-> extracted, verified against the accounting system's own arithmetic and master data, and
-> registered. Batching the whole folder, the vision route for scans, and the review queue
-> are not built yet. This notice comes out when they are.
+> **Status: in development.** The whole folder runs end to end today — both routes, all
+> twelve documents, each routed, extracted, verified against the accounting system's own
+> arithmetic and master data, and either registered or stopped with a reason. What is not
+> built yet is the review queue as a first-class artifact: a stopped invoice reports its
+> findings and writes them to `out/runs/`, but there is no single file collecting them for
+> a reviewer. This notice comes out when there is.
 
 ---
 
@@ -21,15 +23,30 @@ Two terminals. The accounting system runs in one, the pipeline in the other.
 python accounting_api.py
 ```
 
-**2 — run the pipeline** on one document:
+**2 — run the pipeline.** Point it at the folder for the whole set:
+
+```bash
+python -m src.main invoices/
+```
+
+Or at a single document, which prints the full evidence for every finding:
 
 ```bash
 python -m src.main invoices/<file>
 ```
 
-It exits `0` when the invoice was registered and `1` when it was stopped — either by a
-local check or by the accounting system. A stopped invoice prints every finding against
-it, with the evidence, and writes the same to `out/runs/`.
+A batch ends with a per-invoice outcome table, also written to `out/outcomes.md`. It exits
+`0` when every document reached a decision — registered, or stopped with a reason — and
+`2` when any did not. **A stopped invoice is a correct outcome, not a failure of the run.**
+A full pass over the sample set registers 7, stops 1 as a duplicate, and sends 4 to a
+person; a run reporting 12 of 12 registered would mean something was wrong.
+
+A single-document run exits `0` when the invoice was registered and `1` when it was
+stopped. Either way the findings and the evidence go to `out/runs/<name>.json`.
+
+Extraction is cached on disk, keyed by file content, so re-running costs no API requests
+and takes seconds. Uncached calls in a batch are spaced 13 seconds apart to stay inside the
+free tier's 5-per-minute limit.
 
 If something on your machine already owns port 8080 on loopback, set `ACCOUNTING_API_URL`
 in `.env`; `accounting_api.py` binds `0.0.0.0`, so it stays reachable on the machine's own
@@ -85,9 +102,27 @@ is a decision for a person — not something to retry until it succeeds.
 pytest
 ```
 
-`tests/test_contract.py` enforces the structural claims `CLAUDE.md` makes about this
-codebase — that `verify/` is pure, that nothing branches on a sample filename, that no
-amount is a float. It is static, needs no API key, and runs in well under a second.
+Ninety-three tests, all offline. **No API key, no running accounting system, no network.**
+That is a property of the design rather than of the tests: `verify/` is pure, so every
+check can be run against a fabricated invoice for free.
+
+- `tests/test_contract.py` — the structural claims `CLAUDE.md` makes about this codebase:
+  that `verify/` is pure, that nothing branches on a sample filename, that no amount is a
+  float. Static analysis of the source itself.
+- `tests/test_verify.py` — each check watched failing on a corrupted extraction. A sign
+  flipped, a row dropped at a page break, a digit slipped, an era year converted wrongly,
+  the same invoice arriving twice in two formats. Read the test names as a list of the
+  failure modes this system is known to catch.
+- `tests/test_routing.py` — renames a text-layer PDF to `.jpg` and asserts the route does
+  not move, and the reverse. The contract test proves no filename is *named*; this proves
+  the extension is not consulted either.
+
+There is also a sabotage driver, which corrupts a real extraction eleven ways and shows
+each one stopped:
+
+```bash
+python -m tests.sabotage invoices/<file>
+```
 
 ---
 
