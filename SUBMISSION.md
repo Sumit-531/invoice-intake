@@ -3,7 +3,7 @@
 - Name: Sumit Chakraborty
 - Submission date (YYYY-MM-DD): 2026-08-26
 - Hours actually spent: 8.5 (6 building, 2.5 on this document and the screenshots)
-- Repository / how to run it: https://github.com/Sumit-531/invoice-intake (see `README.md`, "Run it")
+- Repository / how to run it: https://github.com/Sumit-531/invoice-intake (see "Quick Start" in `README.md`; the pipeline itself is one command, `python -m src.main invoices/`)
 
 ## 1. Understanding the request
 
